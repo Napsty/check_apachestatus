@@ -1,11 +1,13 @@
 #!/usr/bin/perl -w
 ####################### check_apachestatus.pl #######################
-# Version : 1.1
-# Date : 27 Jul 2007 
-# Author  : De Bodt Lieven (Lieven.DeBodt at gmail.com)
-# Licence : GPL - http://www.fsf.org/licenses/gpl.txt
+# Version : 1.5
+# Date : Jul 7 2025
+# Copyright 2007 De Bodt Lieven (Lieven.DeBodt at gmail.com)
+# Copyright 2008 Karsten Behrens (karsten at behrens dot in)
+# Copyright 2008 Geoff McQueen (geoff.mcqueen at hiivesystems dot com)
+# Copyright 2025 Claudio Kuenzler (ck at claudiokuenzler dot com)
+# Licence    : GPL - http://www.fsf.org/licenses/gpl.txt
 #############################################################
-#
 # 20080912 <karsten at behrens dot in> v1.2
 #          added output of Requests/sec, kB/sec, kB/request  
 #          changed perfdata output so that PNP accepts it
@@ -20,6 +22,11 @@
 #          and provided capacity for MB and GB scale options
 #          on bytes per second and bytes per request (untested)
 #
+# 20250707 <ck at claudiokuenzler dot com > v1.5
+#          Added optional parameter for setting user agent (-a / --agent)
+#          Fixed uninitialized variable warnings
+#          Fixed busy and idle worker parsing (used in plugin output)
+#############################################################
 # help : ./check_apachestatus.pl -h
 
 use strict;
@@ -28,30 +35,29 @@ use LWP::UserAgent;
 use Time::HiRes qw(gettimeofday tv_interval);
 
 # Nagios specific
-
 use lib "/usr/lib/nagios/plugins";
 use utils qw(%ERRORS $TIMEOUT);
 #my %ERRORS=('OK'=>0,'WARNING'=>1,'CRITICAL'=>2,'UNKNOWN'=>3,'DEPENDENT'=>4);
 
 # Globals
-
-my $Version='1.4';
+my $Version='1.5';
 my $Name=$0;
-
 my $o_host =		undef; 		# hostname 
 my $o_help=		undef; 		# want some help ?
 my $o_port = 		undef; 		# port
+my $o_agent = 		undef; 		# user agent
 my $o_version= 		undef;  	# print version
 my $o_warn_level=	undef;  	# Number of available slots that will cause a warning
 my $o_crit_level=	undef;  	# Number of available slots that will cause an error
 my $o_timeout=  	15;            	# Default 15s Timeout
+my $BusyWorkers=	0;
+my $IdleWorkers=	0;
 
 # functions
-
 sub show_versioninfo { print "$Name version : $Version\n"; }
 
 sub print_usage {
-  print "Usage: $Name -H <host> [-p <port>] [-t <timeout>] [-w <warn_level> -c <crit_level>] [-V]\n";
+  print "Usage: $Name -H <host> [-p <port>] [-a <agent>] [-t <timeout>] [-w <warn_level> -c <crit_level>] [-V]\n";
 }
 
 # Get the alarm signal
@@ -71,6 +77,8 @@ sub help {
    name or IP address of host to check
 -p, --port=PORT
    Http port
+-a, --agent=USERAGENT
+   User-Agent to use in HTTP request
 -t, --timeout=INTEGER
    timeout in seconds (Default: $o_timeout)
 -w, --warn=MIN
@@ -117,6 +125,7 @@ sub check_options {
       'h'     => \$o_help,        'help'          => \$o_help,
       'H:s'   => \$o_host,        'hostname:s'	  => \$o_host,
       'p:i'   => \$o_port,        'port:i'	  => \$o_port,
+      'a:s'   => \$o_agent,       'agent:s'	  => \$o_agent,
       'V'     => \$o_version,     'version'       => \$o_version,
       'w:i'   => \$o_warn_level,  'warn:i'	  => \$o_warn_level,
       'c:i'   => \$o_crit_level,  'critical:i'	  => \$o_crit_level,
@@ -134,10 +143,10 @@ sub check_options {
 }
 
 ########## MAIN ##########
-
 check_options();
 
 my $ua = LWP::UserAgent->new( protocols_allowed => ['http'], timeout => $o_timeout);
+$ua->agent($o_agent) if $o_agent;
 my $timing0 = [gettimeofday];
 my $response = undef;
 if (!defined($o_port)) {
@@ -152,12 +161,10 @@ if ($response->is_success) {
   $webcontent=$response->content;
   my @webcontentarr = split("\n", $webcontent);
   my $i = 0;
-  my $BusyWorkers=undef;
-  my $IdleWorkers=undef;
   # Get the amount of idle and busy workers(Apache2)/servers(Apache1)
-  while (($i < @webcontentarr) && ((!defined($BusyWorkers)) || (!defined($IdleWorkers)))) {
-    if ($webcontentarr[$i] =~ /(\d+)\s+requests\s+currently\s+being\s+processed,\s+(\d+)\s+idle\s+....ers/) {
-      ($BusyWorkers, $IdleWorkers) = ($webcontentarr[$i] =~ /(\d+)\s+requests\s+currently\s+being\s+processed,\s+(\d+)\s+idle\s+....ers/);
+  while ($i < @webcontentarr) {
+    if ($webcontentarr[$i] =~ /(\d+)\s+requests\s+currently\s+being\s+processed,.*\s+(\d+)\s+idle\s+workers/) {
+      ($BusyWorkers, $IdleWorkers) = ($webcontentarr[$i] =~ /(\d+)\s+requests\s+currently\s+being\s+processed,.*\s+(\d+)\s+idle\s+workers/);
     }
     $i++;
   }
